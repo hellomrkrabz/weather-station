@@ -32,6 +32,13 @@ DHT dht(DHTPIN, DHTTYPE);
 //Tworzymy objekt AsyncWebServer naporcie 80
 AsyncWebServer server(80);
 
+uint32_t getAbsoluteHumidity(float temperature, float humidity) {
+    // approximation formula from Sensirion SGP30 Driver Integration chapter 3.15
+    const float absoluteHumidity = 216.7f * ((humidity / 100.0f) * 6.112f * exp((17.62f * temperature) / (243.12f + temperature)) / (273.15f + temperature)); // [g/m^3]
+    const uint32_t absoluteHumidityScaled = static_cast<uint32_t>(1000.0f * absoluteHumidity); // [mg/m^3]
+    return absoluteHumidityScaled;
+}
+
 //Odczytujemy temperature zczujnika DHT11
 String readDHTTemperature() {
   float t = dht.readTemperature();
@@ -156,6 +163,7 @@ String processor(const String& var) {
 
 void setup() {
   Serial.begin(115200);
+  while (!Serial) { delay(10); }
   display.begin(SH1106_SWITCHCAPVCC, 0x3C);
   display.clearDisplay();
   display.display();
@@ -166,6 +174,10 @@ void setup() {
     Serial.println("Sensor not found :(");
     while (1);
   }
+  Serial.print("Found SGP30 serial #");
+  Serial.print(sgp.serialnumber[0], HEX);
+  Serial.print(sgp.serialnumber[1], HEX);
+  Serial.println(sgp.serialnumber[2], HEX);
 
   //Łączenie zWiFi
   WiFi.begin(ssid, password);
@@ -189,11 +201,43 @@ void setup() {
 
   server.begin();
 }
+
+int counter = 0;
+
 void loop() {
-  //float t = dht.readTemperature();
-  //float h= dht.readHumidity();
+  float temperature = dht.readTemperature();
+  float humidity = dht.readHumidity();
   //float co2 = sgp.eCO2;
   //float tvoc = sgp.TVOC;
+  sgp.setHumidity(getAbsoluteHumidity(temperature, humidity));
+  if (! sgp.IAQmeasure()) {
+    Serial.println("Measurement failed");
+    return;
+  }
+  Serial.print("TVOC "); Serial.print(sgp.TVOC); Serial.print(" ppb\t");
+  Serial.print("eCO2 "); Serial.print(sgp.eCO2); Serial.println(" ppm");
+
+  if (! sgp.IAQmeasureRaw()) {
+    Serial.println("Raw Measurement failed");
+    return;
+  }
+  Serial.print("Raw H2 "); Serial.print(sgp.rawH2); Serial.print(" \t");
+  Serial.print("Raw Ethanol "); Serial.print(sgp.rawEthanol); Serial.println("");
+ 
+  delay(1000);
+
+  counter++;
+  if (counter == 30) {
+    counter = 0;
+
+    uint16_t TVOC_base, eCO2_base;
+    if (! sgp.getIAQBaseline(&eCO2_base, &TVOC_base)) {
+      Serial.println("Failed to get baseline readings");
+      return;
+    }
+    Serial.print("****Baseline values: eCO2: 0x"); Serial.print(eCO2_base, HEX);
+    Serial.print(" & TVOC: 0x"); Serial.println(TVOC_base, HEX);
+  }
   //Wypisanie danych naekranie OLED
   display.setTextColor(WHITE);
   /*display.setCursor(0, 0);
